@@ -23,8 +23,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-url = "mongodb+srv://new:AxSTmcD1mKFH6ybo@basics.d7bdh.mongodb.net/?retryWrites=true&w=majority&appName=Basics"
-#url = "mongodb+srv://naufal:naufal@intern.hd30j.mongodb.net/?retryWrites=true&w=majority&appName=intern"
+url = "<mongodb>"
+#url = "<mongodb>"
 DB_NAME = "asta"
 #DB_NAME = "hivemq"
 #COLLECTION_NAME = "sensor"
