@@ -5,11 +5,11 @@ import json
 import pymongo
 
 # Define all the necessary values to connect to the HiveMQ broker
-broker = "bc750697586e4ac7ab885ccb264207da.s1.eu.hivemq.cloud"
-port = 8883
-username = "Astainterns"
-password = "Qu8nSJ4Tesdbp"
-topic = "TELEMETRIX/TRUSTED/ASTA/Interns/#"
+broker = "<broker>"
+port = <port>
+username = "<username>"
+password = "<password>"
+topic = "<topic>"
 
 url = "<MongoDB Database>"
 myclient = pymongo.MongoClient(url)
