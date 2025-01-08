@@ -7,8 +7,13 @@ from datetime import datetime, timedelta
 from fpdf import FPDF
 import os
 import tempfile
+import io
+import base64
 
 app = Flask(__name__)
+
+local = "UTC"
+convert = "Asia/Singapore"
 
 # MongoDB connection setup
 client = MongoClient('mongodb+srv://new:AxSTmcD1mKFH6ybo@basics.d7bdh.mongodb.net/?retryWrites=true&w=majority&appName=Basics')
@@ -111,10 +116,12 @@ def query_data(start_date=None, end_date=None):
     return list(collection.find(query)), query
 
 # Function to process binary parameters (0 and 1 counts, expected frequency) as a time series
-def process_binary_data(df, param, interval, display_type, output_dir, pdf):
+def process_binary_data(df, param, interval, display_type, output_dir):
     df = df.copy()
     # Ensure that the time column is in datetime format and set it as the index
     df['time'] = pd.to_datetime(df['time'])
+    df['time'] = df['time'].dt.tz_localize(local)
+    df['time'] = df['time'].dt.tz_convert(convert)
     df.set_index('time', inplace=True)
 
     # Filter data for the specified parameter and convert string values ('0', '1') to integers
@@ -150,41 +157,24 @@ def process_binary_data(df, param, interval, display_type, output_dir, pdf):
     elif interval == 'yearly':
         df_resampled = df.resample('YS').agg({param: [count_1, count_0]})
 
-    # Ensure proper handling of multi-level column names
-    df_resampled.columns = [f'{param}_{agg}' for agg in df_resampled.columns.get_level_values(1)]
+    df_resampled.columns = [f'{agg}' for agg in df_resampled.columns.get_level_values(1)]
 
     print(df_resampled.head())  # Debugging output
 
     # Remove any points where both count_0 and count_1 are 0 (i.e., no data for that interval)
-    df_resampled = df_resampled[(df_resampled[f'{param}_count_0'] > 0) | (df_resampled[f'{param}_count_1'] > 0)]
+    df_resampled = df_resampled[(df_resampled['count_0'] > 0) | (df_resampled['count_1'] > 0)]
 
     # Extract counts of 0 and 1 for plotting
-    counts_1 = df_resampled[f'{param}_count_1']  # Count of 1's
-    counts_0 = df_resampled[f'{param}_count_0']  # Count of 0's
+    counts_1 = df_resampled['count_1']  # Count of 1's
+    counts_0 = df_resampled['count_0']  # Count of 0's
 
     # Calculate expected frequency for binary events (1 or 0)
-    # Probability for previous event being 1 and 0
     prev_prob_1 = counts_1.shift(1) / (counts_1.shift(1) + counts_0.shift(1))  # Probability of previous event being 1
     prev_prob_0 = counts_0.shift(1) / (counts_1.shift(1) + counts_0.shift(1))  # Probability of previous event being 0
 
     # Expected frequency based on probability for 1 and 0
     expected_freq_1 = prev_prob_1 * (counts_0 + counts_1)  # Expected frequency for 1 based on probability
     expected_freq_0 = prev_prob_0 * (counts_0 + counts_1)  # Expected frequency for 0 based on probability
-
-# Add a new page for the dataframe summary
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt=f"Summary Table for {param} ({interval.capitalize()})", ln=True, align="C")
-    
-    # Convert the dataframe to text and add to the PDF
-    pdf.set_font("Courier", size=10)
-    table_text = df_resampled.to_string()
-    pdf.multi_cell(0, 10, table_text)
-
-    # Add a new page for the plot
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt=f"Plot for Binary Parameter '{param}' ({interval.capitalize()})", ln=True, align="C")
 
     # Display based on user input (either counts or expected frequencies)
     if display_type == "expected":
@@ -194,41 +184,46 @@ def process_binary_data(df, param, interval, display_type, output_dir, pdf):
         plt.scatter(df_resampled.index, counts_1, label='Count 1', color='red', marker='o', alpha=0.6)
         plt.scatter(df_resampled.index, expected_freq_1, label='Expected Frequency for 1', color='green', marker='x', alpha=0.6)
         plt.scatter(df_resampled.index, expected_freq_0, label='Expected Frequency for 0', color='purple', marker='x', alpha=0.6)
+        plt.title(f"Parameter '{param}' - Expected Frequencies ({interval})")
     elif display_type == "counts":
         # Plot the counts of 0's and 1's as scatter points
         plt.figure(figsize=(12, 6))
         plt.plot(df_resampled.index, counts_0, label='Count 0', color='blue', marker='o', alpha=0.6)
         plt.plot(df_resampled.index, counts_1, label='Count 1', color='red', marker='o', alpha=0.6)
+        plt.title(f"Parameter '{param}' - Counts ({interval})")
 
-    # Add titles and labels
-    plt.title(f"Parameter '{param}' - {display_type.capitalize()} ({interval})")
+    df_resampled_real = df_resampled
+    df_resampled_real['timer'] = df_resampled.index
+
+    if interval == "hourly":
+        df_resampled_real['timer'] = df_resampled_real['timer'].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S'))
+    else:
+        df_resampled_real['timer'] = df_resampled_real['timer'].apply(lambda x: x.strftime('%Y-%m-%d'))
+
+    # Add labels and a grid to the plot
     plt.xlabel("Time")
     plt.ylabel("Count / Expected Frequency")
     plt.legend()
     plt.grid(True)
 
-    # Save the plot to a temporary file
-    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-        plt.savefig(tmp_file, format='png')
-        plot_file_path = tmp_file.name
-
-    # Add the plot to the PDF
-    pdf.image(plot_file_path, x=10, y=30, w=200)
-
-    # Save resampled data as CSV
-    resampled_file_path = os.path.join(output_dir, f'{param}_binary_resampled.csv')
-    df_resampled.to_csv(resampled_file_path)
-
-    plt.show()
+    # Convert plot to base64
+    img = io.BytesIO()
+    plt.savefig(img, format='png')
+    img.seek(0)
+    plot_url = base64.b64encode(img.getvalue()).decode('utf-8')
     plt.close()
+    return plot_url, df_resampled_real
 
 
 # Function to process decimal parameters (min, mean, max) as a time series
-def process_decimal_data(df, param, interval, output_dir, pdf):
+def process_decimal_data(df, param, interval, output_dir):
     df = df.copy()
+    print(df)
 
     # Convert the time column to datetime and set it as the index
     df['time'] = pd.to_datetime(df['time'])
+    df['time'] = df['time'].dt.tz_localize(local)
+    df['time'] = df['time'].dt.tz_convert(convert)
     
     # Filter data for the specified parameter
     df[param] = df['params'].apply(lambda x: x.get(param, None))  # Extract the specific parameter
@@ -239,7 +234,7 @@ def process_decimal_data(df, param, interval, output_dir, pdf):
     # Only keep rows where the parameter is a valid number (non-NaN)
     df = df[df[param].notnull()]
 
-    df_resampled = df
+    df_resampled = None
 
     # Resample data based on the given interval
     if interval == 'hourly':
@@ -258,48 +253,41 @@ def process_decimal_data(df, param, interval, output_dir, pdf):
         df.set_index('time', inplace=True)
         df_resampled = df.resample('YS').agg({param: ['min', 'mean', 'max']})
 
-    print(df_resampled.head())
+    #print(df_resampled.head())
 
-# Add a new page for the dataframe summary
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt=f"Summary Table for {param} ({interval.capitalize()})", ln=True, align="C")
+    columns_to_round = [(param, 'min'), (param, 'mean'), (param, 'max')]
+    df_resampled[columns_to_round] = df_resampled[columns_to_round].round(2)
+
+    df_resampled_real = df_resampled
+    df_resampled_real['timer'] = df_resampled.index
+    if interval == "hourly":
+        df_resampled_real['timer'] = df_resampled_real['timer'].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S'))
+    else:
+        df_resampled_real['timer'] = df_resampled_real['timer'].apply(lambda x: x.strftime('%Y-%m-%d'))
     
-    # Convert the dataframe to text and add to the PDF
-    pdf.set_font("Courier", size=10)
-    table_text = df_resampled.to_string()
-    pdf.multi_cell(0, 10, table_text)
-
-    # Add a new page for the plot
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt=f"Plot for Decimal Parameter '{param}' ({interval.capitalize()})", ln=True, align="C")
+    print("DF Resampled Head Real Decimal")
+    print(df_resampled_real)
 
     # Plot min, mean, and max as time series
     plt.figure(figsize=(12, 6))
-    df_resampled[param, 'min'].plot(label='Min', color='blue', marker='o')
-    df_resampled[param, 'mean'].plot(label='Mean', color='green', marker='o')
-    df_resampled[param, 'max'].plot(label='Max', color='red', marker='o')
+    plt.plot(df_resampled.index, df_resampled[param, 'min'], label='Min', color='blue', marker='o')
+    plt.plot(df_resampled.index, df_resampled[param, 'mean'], label='Mean', color='green', marker='o')
+    plt.plot(df_resampled.index, df_resampled[param, 'max'], label='Max', color='red', marker='o')
     plt.title(f"Parameter '{param}' Statistics ({interval})")
     plt.xlabel("Time")
     plt.ylabel(param)
     plt.legend()
     plt.grid(True)
 
-    # Save the plot to a temporary file
-    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-        plt.savefig(tmp_file, format='png')
-        plot_file_path = tmp_file.name
-
-    # Add the plot to the PDF
-    pdf.image(plot_file_path, x=10, y=30, w=200)
-
-    # Save resampled data as CSV
-    resampled_file_path = os.path.join(output_dir, f'{param}_decimal_resampled.csv')
-    df_resampled.to_csv(resampled_file_path)
-
-    plt.show()
+    # Convert plot to base64
+    img = io.BytesIO()
+    plt.savefig(img, format='png')
+    img.seek(0)
+    plot_url = base64.b64encode(img.getvalue()).decode('utf-8')
     plt.close()
+
+    # Return the plot path and resampled data
+    return plot_url, df_resampled_real
 
 
 # Function to determine the date range
@@ -424,9 +412,12 @@ def generate_report(user_input, params, interval, start_date, end_date, display_
     print(f"Report saved to: {pdf_output_path}")
     return pdf_output_path
 
+
 # Route to display the form and results
 @app.route("/", methods=["GET", "POST"])
 def index():
+    plot_files = {}
+    resampled_data = {}
     if request.method == "POST":
         user_input = request.form["query"]
         
@@ -435,13 +426,25 @@ def index():
         if not end_date:
             start_date, end_date = get_date_range(start_date, interval)
         
-        # Generate the report
-        pdf_path = generate_report(user_input, params, interval, start_date, end_date, display_type)
-        
-        # Provide a link to download the generated report
-        return send_file(pdf_path, as_attachment=True)
+        # Query MongoDB data for the given time range and all params
+        data, query = query_data(start_date, end_date)
 
-    return render_template("index.html")
+        # Convert to DataFrame for further processing
+        df = pd.DataFrame(data)
+        
+        for param in params:
+            if param in binary_params:
+                plot_url, resampled = process_binary_data(df, param, interval, display_type, ".\\Report")
+                plot_files[param] = plot_url
+                resampled_data[param] = resampled.to_dict(orient='records')
+            if param in decimal_params:
+                plot_url, resampled = process_decimal_data(df, param, interval, ".\\Report")
+                plot_files[param] = plot_url
+                resampled_data[param] = resampled.to_dict(orient='records')
+        
+        print(resampled_data)
+
+    return render_template("index.html", plot_file=plot_files, resampled_data=resampled_data, binary_params=binary_params, decimal_params=decimal_params)
 
 # Function to render the page with the form
 @app.route("/form")
