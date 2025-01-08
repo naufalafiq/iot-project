@@ -13,5 +13,70 @@
         <input type="text" id="query" name="query" required><br><br>
         <input type="submit" value="Generate Report">
     </form>
+    
+    {% if plot_file %}
+    <hr>
+    <h1>Report Results</h1>
+    
+
+    <!-- Display Binary Data Results -->
+    <h2>Binary Data</h2>
+    {% for param, plot_url in plot_file.items() %}
+    {% if param in binary_params %}
+        <h3>Parameter: {{ param }}</h3>
+        <table border="1">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Count 0</th>
+                    <th>Count 1</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in resampled_data[param] %}
+                    <tr>
+                        <td>{{ entry['timer'] }}</td>
+                        <td>{{ entry['count_0'] }}</td>
+                        <td>{{ entry['count_1'] }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <h3>Plot</h3>
+        <img src="data:image/png;base64,{{ plot_url }}" alt="Plot for {{ param }}", width="800">
+    {% endif %}
+    {% endfor %}
+    
+    <hr>
+    <!-- Display Decimal Data Results -->
+    <h2>Decimal Data</h2>
+    {% for param, plot_url in plot_file.items() %}
+    {% if param in decimal_params %}
+        <h3>Parameter: {{ param }}</h3>
+        <table border="1">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Min</th>
+                    <th>Mean</th>
+                    <th>Max</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in resampled_data[param] %}
+                    <tr>
+                        <td>{{ entry['timer', ''] }}</td>
+                        <td>{{ entry[param, 'min'] }}</td>
+                        <td>{{ entry[param, 'mean'] }}</td>
+                        <td>{{ entry[param, 'max'] }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <h3>Plot</h3>
+        <img src="data:image/png;base64,{{ plot_url }}" alt="Plot for {{ param }}", width="800">
+    {% endif %}
+    {% endfor %}
+    {% endif %}
 </body>
 </html>
