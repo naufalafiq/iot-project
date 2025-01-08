@@ -121,3 +121,20 @@ input[type="submit"]:hover {
 input[type="submit"]:active {
     background-color: #3e8e41;  /* Even darker green when clicked */
 }
+
+table {
+    border-collapse: collapse;
+    margin: 15px;
+}
+
+th, td {
+    padding: 6px;
+}
+
+hr {
+    margin: 20px;
+}
+
+img {
+    padding: 15px;
+}
