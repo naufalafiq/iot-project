@@ -35,7 +35,7 @@
             <tbody>
                 {% for entry in resampled_data[param] %}
                     <tr>
-                        <td>{{ entry['timer'] }}</td>
+                        <td>{{ entry['time'] }}</td>
                         <td>{{ entry['count_0'] }}</td>
                         <td>{{ entry['count_1'] }}</td>
                     </tr>
@@ -65,10 +65,10 @@
             <tbody>
                 {% for entry in resampled_data[param] %}
                     <tr>
-                        <td>{{ entry['timer', ''] }}</td>
-                        <td>{{ entry[param, 'min'] }}</td>
-                        <td>{{ entry[param, 'mean'] }}</td>
-                        <td>{{ entry[param, 'max'] }}</td>
+                        <td>{{ entry['time'] }}</td>
+                        <td>{{ entry['min'] }}</td>
+                        <td>{{ entry['mean'] }}</td>
+                        <td>{{ entry['max'] }}</td>
                     </tr>
                 {% endfor %}
             </tbody>
@@ -77,6 +77,8 @@
         <img src="data:image/png;base64,{{ plot_url }}" alt="Plot for {{ param }}", width="800">
     {% endif %}
     {% endfor %}
+    <h2>JSON Format</h2>
+    <div>{{ resampled_data }}</div>
     {% endif %}
 </body>
 </html>
