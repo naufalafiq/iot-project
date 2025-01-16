@@ -6,7 +6,10 @@ import re
 from datetime import datetime, timedelta
 from fpdf import FPDF
 import os
-import tempfile
+import spacy
+from spacy.matcher import Matcher
+from dateparser import parse
+from datetime import datetime, timedelta
 import io
 import base64
 
@@ -16,7 +19,7 @@ local = "UTC"
 convert = "Asia/Singapore"
 
 # MongoDB connection setup
-client = MongoClient('mongodb+srv://new:AxSTmcD1mKFH6ybo@basics.d7bdh.mongodb.net/?retryWrites=true&w=majority&appName=Basics')
+client = MongoClient('<MongoDB Client>')
 db = client['asta']
 collection = db['telemetrix']
 
@@ -45,47 +48,74 @@ def convert_date(date_str, is_end=False):
 
 # Function to parse user input
 def parse_input(user_input):
+    nlp = spacy.load("en_core_web_sm")
+    doc = nlp(user_input)
 
-    # Check for the 'expected' keyword and remove it if present
-    display_type = "counts"  # Default to "counts"
+    # Initialize results
+    params = []
+    interval = None
+    start_date = None
+    end_date = None
+    display_type = "counts"  # Default display type
+    
+    # 1. Extract Parameters
+    matcher = Matcher(nlp.vocab)
+    parameter_patterns = [
+        [{"LOWER": "door"}],
+        [{"LOWER": "motion"}],
+        [{"LOWER": "temperature"}],
+        [{"LOWER": "humidity"}],
+    ]
+    matcher.add("PARAMETERS", parameter_patterns)
+    matches = matcher(doc)
+    for _, start, end in matches:
+        params.append(doc[start:end].text)
+
+    # 2. Extract Dates
+    tokens = list(doc)
+    from_date_tokens = None
+    to_date_tokens = None
+    on_date_tokens = None  # For handling "on" keyword
+
+    for i, token in enumerate(tokens):
+        if token.text.lower() == "from" and i + 1 < len(tokens):
+            from_date_tokens = tokens[i + 1 : i + 4]
+        elif token.text.lower() == "to" and i + 1 < len(tokens):
+            to_date_tokens = tokens[i + 1 : i + 4]
+        elif token.text.lower() == "on" and i + 1 < len(tokens):
+            on_date_tokens = tokens[i + 1 : i + 4]  
+
+    # Parse the dates using dateparser
+    if from_date_tokens:
+        start_date = parse(" ".join([t.text for t in from_date_tokens]))
+    if to_date_tokens:
+        end_date = parse(" ".join([t.text for t in to_date_tokens]))
+    if on_date_tokens:
+        start_date = parse(" ".join([t.text for t in on_date_tokens]))
+    
+    # 3. Extract Time Intervals
+    if "hourly" in user_input:
+        interval = "hourly"
+    elif "daily" in user_input:
+        interval = "daily"
+    elif "weekly" in user_input:
+        interval = "weekly"
+    elif "monthly" in user_input:
+        interval = "monthly"
+
+    # 4. Extract Display Type
     if "expected" in user_input:
         display_type = "expected"
-        user_input = user_input.replace("expected", "")  # Remove "expected" from the input
 
-    # Regular expression to match the full input pattern with from-to date range
-    match_full = re.match(r"([\w, ]+)\s*(hourly|daily|weekly|monthly)\s*from\s*(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})\s*(expected)?", user_input)
-    if match_full:
-        params = match_full.group(1).split(",")  # Split by commas to handle multiple parameters
-        interval = match_full.group(2)
-        start_date = match_full.group(3)
-        end_date = match_full.group(4)
-        
-        # Clean up spaces around parameter names
-        params = [param.strip() for param in params]
-        
-        print(f"Input - Date Range, Params: {params}, Interval: {interval}, Start: {start_date}, End: {end_date}, Display Type: {display_type}")
-        return params, interval, start_date, end_date, display_type
+    # Convert start_date and end_date to string if they are not None
+    if start_date:
+        start_date = start_date.strftime('%Y-%m-%d')  # Convert to string (e.g., "2024-12-01")
+    if end_date:
+        end_date = end_date.strftime('%Y-%m-%d')  # Convert to string (e.g., "2024-12-10")
 
-    # Match when only one date is specified (single date, no end date)
-    match_single = re.match(r"([\w, ]+)\s*(hourly|daily|weekly|monthly)\s*from\s*(\d{4}-\d{2}-\d{2})\s*(expected)?", user_input)
-    if match_single:
-        params = match_single.group(1).split(",")  # Split by commas
-        interval = match_single.group(2)
-        start_date = match_single.group(3)
-        end_date = None
-        
-        # Clean up spaces around parameter names
-        params = [param.strip() for param in params]
-        
-        print(f"Input - Single Date - Params: {params}, Interval: {interval}, Start: {start_date}, Display Type: {display_type}")
-        return params, interval, start_date, end_date, display_type
+    print(f"Params: {params}\nInterval: {interval}\nStart Date: {start_date}\nEnd Date: {end_date}\nDisplay Type: {display_type}")
 
-    # Case when no dates are specified (fetch all data)
-    params = user_input.split()[0].split(",")
-    interval = user_input.split()[1]
-    params = [param.strip() for param in params]  # Clean up spaces around parameter names
-    print(f"Input - No Date - Params: {params}, Interval: {interval}, Display Type: {display_type}")
-    return params, interval, None, None, display_type  # Default to "counts"
+    return params, interval, start_date, end_date, display_type  # Default to "counts"
 
 # Function to query MongoDB data for the params field and a specific date range
 def query_data(start_date=None, end_date=None):
@@ -193,12 +223,12 @@ def process_binary_data(df, param, interval, display_type, output_dir):
         plt.title(f"Parameter '{param}' - Counts ({interval})")
 
     df_resampled_real = df_resampled
-    df_resampled_real['timer'] = df_resampled.index
+    df_resampled_real['time'] = df_resampled.index
 
     if interval == "hourly":
-        df_resampled_real['timer'] = df_resampled_real['timer'].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S'))
+        df_resampled_real['time'] = df_resampled_real['time'].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S'))
     else:
-        df_resampled_real['timer'] = df_resampled_real['timer'].apply(lambda x: x.strftime('%Y-%m-%d'))
+        df_resampled_real['time'] = df_resampled_real['time'].apply(lambda x: x.strftime('%Y-%m-%d'))
 
     # Add labels and a grid to the plot
     plt.xlabel("Time")
@@ -211,7 +241,7 @@ def process_binary_data(df, param, interval, display_type, output_dir):
     plt.savefig(img, format='png')
     img.seek(0)
     plot_url = base64.b64encode(img.getvalue()).decode('utf-8')
-    plt.close()
+    #plt.close()
     return plot_url, df_resampled_real
 
 
@@ -253,26 +283,27 @@ def process_decimal_data(df, param, interval, output_dir):
         df.set_index('time', inplace=True)
         df_resampled = df.resample('YS').agg({param: ['min', 'mean', 'max']})
 
-    #print(df_resampled.head())
+    print(df_resampled.head())
 
-    columns_to_round = [(param, 'min'), (param, 'mean'), (param, 'max')]
+    df_resampled.columns = [f'{col[1]}' for col in df_resampled.columns]
+    columns_to_round = ['min', 'mean', 'max']
     df_resampled[columns_to_round] = df_resampled[columns_to_round].round(2)
 
     df_resampled_real = df_resampled
-    df_resampled_real['timer'] = df_resampled.index
+    df_resampled_real['time'] = df_resampled.index
     if interval == "hourly":
-        df_resampled_real['timer'] = df_resampled_real['timer'].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S'))
+        df_resampled_real['time'] = df_resampled_real['time'].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S'))
     else:
-        df_resampled_real['timer'] = df_resampled_real['timer'].apply(lambda x: x.strftime('%Y-%m-%d'))
+        df_resampled_real['time'] = df_resampled_real['time'].apply(lambda x: x.strftime('%Y-%m-%d'))
     
     print("DF Resampled Head Real Decimal")
     print(df_resampled_real)
 
     # Plot min, mean, and max as time series
     plt.figure(figsize=(12, 6))
-    plt.plot(df_resampled.index, df_resampled[param, 'min'], label='Min', color='blue', marker='o')
-    plt.plot(df_resampled.index, df_resampled[param, 'mean'], label='Mean', color='green', marker='o')
-    plt.plot(df_resampled.index, df_resampled[param, 'max'], label='Max', color='red', marker='o')
+    plt.plot(df_resampled.index, df_resampled['min'], label='Min', color='blue', marker='o')
+    plt.plot(df_resampled.index, df_resampled['mean'], label='Mean', color='green', marker='o')
+    plt.plot(df_resampled.index, df_resampled['max'], label='Max', color='red', marker='o')
     plt.title(f"Parameter '{param}' Statistics ({interval})")
     plt.xlabel("Time")
     plt.ylabel(param)
@@ -284,7 +315,7 @@ def process_decimal_data(df, param, interval, output_dir):
     plt.savefig(img, format='png')
     img.seek(0)
     plot_url = base64.b64encode(img.getvalue()).decode('utf-8')
-    plt.close()
+    #plt.close()
 
     # Return the plot path and resampled data
     return plot_url, df_resampled_real
@@ -452,4 +483,4 @@ def form():
     return render_template("index.html")
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run()
